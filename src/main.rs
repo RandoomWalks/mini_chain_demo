@@ -1,453 +1,606 @@
+use hex;
 use rand::Rng;
-use std::boxed::Box;
-use std::collections::VecDeque;
-use std::fmt::Debug;
-use std::iter;
-use std::path::Iter;
+use sha2::{Digest, Sha256};
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::Mutex;
-use tokio::task;
+use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::time::{sleep, Duration};
 
-#[derive(Debug, Clone)]
+// Common structures used across multiple exercises
+
+#[derive(Clone, Debug)]
 struct Block {
     hash: String,
+    parent_hash: Option<String>,
+    number: u64,
+    cumulative_difficulty: u64,
+    gas_used: u64,
+    edit_score: u64,
 }
 
-impl Block {
-    pub fn verify_proof_of_work(&self, difficulty_lvl: usize) -> bool {
-        let s1: &str = "0";
-        let s2: String = s1.repeat(difficulty_lvl);
-        let is_verified = self.hash.starts_with(&s2);
-        is_verified
-    }
+#[derive(Clone, Debug)]
+struct Transaction {
+    id: u64,
+    from: String,
+    to: String,
+    amount: u64,
+    nonce: u64,
 }
 
-pub fn simulate_mine() -> Block {
-    // Implement a simple mining simulation that tries to find a valid hash by brute force.
-    // sha1 output
-    let mut rng = rand::thread_rng();
-    let mut v1: Vec<u8> = (0..20).map(|_| rng.gen()).collect();
-
-    let mut b1 = Block {
-        hash: String::from_utf8(v1).unwrap_or_default(),
-    };
-
-    while !b1.verify_proof_of_work(1) {
-        v1 = (0..20).map(|_| rng.gen()).collect();
-
-        b1 = Block {
-            hash: String::from_utf8(v1).unwrap_or_default(),
-        };
-    }
-    b1
+struct Node {
+    id: u64,
+    chain: HashMap<String, Block>,
+    head: String,
+    peers: Vec<u64>,
 }
 
-
-
-pub fn simulate_mine2() -> Block {
-    // TODO : Complete following simulate_mine_work()
-    // Implement a simple mining simulation that tries to find a valid hash by brute force.
-    // sha1 output
-    let mut rng = rand::thread_rng();
-    let mut hash: [u8; 32] = [0u8; 32]; // sha-256 output 256 bits= 32bytes
-    let mut nonce = 0u64;
-    
-    loop {
-        let n1 = nonce.to_le_bytes(); // Little-endian format stores the least significant byte first.
-        hash[24..].copy_from_slice(&n1);
-        // let f1 = rng.fill();
-        
-        
-// let mut arr = [0i8; 20];
-// rng.fill(&mut arr[..]);
-
-        // Fill the rest with random bytes
-        rng.fill(&mut hash[..24]);
-
-        
-
-        
-        
-    }
-    let mut v1: Vec<u8> = (0..20).map(|_| rng.gen()).collect();
-
-    let mut b1 = Block {
-        hash: String::from_utf8(v1).unwrap_or_default(),
-    };
-
-    while !b1.verify_proof_of_work(1) {
-        v1 = (0..20).map(|_| rng.gen()).collect();
-
-        b1 = Block {
-            hash: String::from_utf8(v1).unwrap_or_default(),
-        };
-    }
-    b1
-}
-
-pub fn simulate_mine_work(difficulty: u32) -> Block {
-    // Initialize a random number generator for generating random bytes
-    let mut rng = rand::thread_rng();
-
-    // Create a 32-byte array to store the hash value (32 bytes for SHA-256)
-    let mut hash = [0u8; 32];  // hash: [0, 0, 0, 0, ..., 0] (32 bytes of zeros initially)
-
-    // Initialize nonce to 0. The nonce will be incremented to find a valid hash
-    let mut nonce = 0u64;  // nonce: 0
-
-    loop {
-        // Convert nonce to 8-byte array in little-endian format
-        // Example: nonce = 0
-        // n1 = [0, 0, 0, 0, 0, 0, 0, 0]
-        let nonce_bytes = nonce.to_le_bytes();  // nonce_bytes: [0, 0, 0, 0, 0, 0, 0, 0]
-
-        // Update the last 8 bytes of the hash with the nonce value
-        // Example: After hash[24..] = nonce_bytes
-        // hash: [0, 0, 0, 0, ..., 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-        hash[24..].copy_from_slice(&nonce_bytes);
-
-        // Fill the first 24 bytes of the hash array with random bytes
-        // Example: Random bytes are generated, e.g.,
-        // hash: [144, 25, 78, 220, 187, 34, 89, 76, ..., random bytes, nonce_bytes]
-        rng.fill(&mut hash[..24]);
-
-        // Create a Block object with the current hash value
-        // Example: Block { hash: [144, 25, 78, 220, ..., random bytes, nonce_bytes] }
-        let block = Block { hash };
-
-        // Check if the current hash meets the difficulty requirement
-        // The method `verify_proof_of_work` likely checks if the hash has the required number of leading zeros
-        // Example: If difficulty is 3, the hash needs to start with at least 3 zeros
-        if block.verify_proof_of_work(difficulty) {
-            // If the hash meets the difficulty, return the block
-            // Example: Returning a block with a valid hash
-            return block;
+// Exercise 1: Chain Resolution Check
+impl Node {
+    fn is_resolved(&self) -> bool {
+        let mut leaves = HashSet::new();
+        for block in self.chain.values() {
+            leaves.insert(block.hash.clone());
         }
-
-        // Increment the nonce for the next iteration
-        // Example: nonce = 0 → 1
-        nonce = nonce.wrapping_add(1);
-    }
-}
-
-
-
-
-
-#[derive(Debug, Clone)]
-struct Chain<T> {
-    leaves: VecDeque<T>,
-}
-
-impl<T: Debug> Chain<T> {
-    fn it_resolves(&self) -> bool {
-        self.leaves.len() == 1
-    }
-    fn print_chain(&self) {
-        for leaf in &self.leaves {
-            println!("leaf:{:#?}", leaf);
-        }
-    }
-}
-
-impl<T> Iterator for Chain<T> {
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.leaves.pop_front()
-    }
-}
-
-// enum Arg {
-//     U8(u8),
-
-// }
-
-
-#[tokio::main]
-async fn main() {
-    let rnd_vec = gen_test_vec(1);
-    // iterate().await;
-    println!("{:#?}", rnd_vec);
-    let rnd_vec2 = gen_test_vec(10);
-    // iterate().await;
-    println!("{:#?}", rnd_vec2);
-
-    let mut rng: rand::prelude::ThreadRng = rand::thread_rng();
-    let bool_opt: Option<bool> = Some(rng.gen_bool(0.5));
-
-    // let s1 = Arg::Address([rng.gen(); 20]);
-
-    let v1: Vec<u8> = (0..10).map(|_| rng.gen()).collect();
-    let mut s2: Result<String, std::string::FromUtf8Error> = String::from_utf8(v1);
-    let s3: String = s2.unwrap_or_default();
-}
-
-async fn iterate() {
-    let shared_state: Arc<Mutex<u8>> = Arc::new(Mutex::new(0));
-
-    let mut handles: Vec<task::JoinHandle<u8>> = vec![];
-
-    let mut chain: Arc<Mutex<Chain<Block>>> = Arc::new(Mutex::new(Chain {
-        leaves: VecDeque::new(),
-    }));
-
-    for i in 0..5 {
-        let state_cpy: Arc<Mutex<u8>> = Arc::clone(&shared_state);
-        let chain_cpy: Arc<Mutex<Chain<Block>>> = Arc::clone(&chain);
-
-        // let seed = i.parse::<String>();
-        let seed: String = i.to_string();
-        let new_block = Block { hash: seed };
-
-        handles.push(tokio::spawn(async move {
-            let mut val: tokio::sync::MutexGuard<u8> = state_cpy.lock().await;
-            *val += 1;
-
-            let mut chain_cpy = chain_cpy.lock().await;
-            chain_cpy.leaves.push_back(new_block);
-
-            // drop(val);
-            return *val;
-        }));
-    }
-
-    let mut tmp: u8 = 1;
-
-    for h in handles {
-        match h.await {
-            Ok(id) => {
-                println!("task joined:{}", id);
-                // assert!(id==tmp, "a = {}, b = {}", id, tmp);
-                tmp += 1;
-
-                // debug!()
-            }
-            Err(e) => {
-                println!("Error: {:#?}", e);
+        for block in self.chain.values() {
+            if let Some(parent) = &block.parent_hash {
+                leaves.remove(parent);
             }
         }
+        leaves.len() == 1
     }
-    {
-        let chain = chain.lock().await;
-        chain.print_chain();
-    }
-    {
-        // let chain: tokio::sync::MutexGuard<Chain<Block>> = chain.lock().await;
-        // let chain2 = chain.iter().cloned();
-    }
-
-    {
-        let mut chain_guard = chain.lock().await;
-        while let Some(block) = chain_guard.leaves.pop_front() {
-            println!("Block hash: {}", block.hash);
-        }
-
-        for i in chain_guard.leaves.iter() {
-            println!("{:#?}", i);
-        }
-
-        // let mut iter = chain.iter().peekable();
-        // while let Some(item) = iter.peek() {
-        //     println!("Peeked item: {:?}", item);
-        //     // Use `iter.next()` if you need to consume the item
-        // }
-    }
-
-    // {
-    //     let chain_guard = chain.lock().await;
-    //     while let Some(block) = chain_guard.clone().next() {
-    //         println!("Block hash: {}", block.hash);
-    //     }
-
-    //     // for i in chain_guard.iter() {
-    //     //     println!("{:#?}",i );
-    //     // }
-
-    //     // let mut iter = chain.iter().peekable();
-    //     // while let Some(item) = iter.peek() {
-    //     //     println!("Peeked item: {:?}", item);
-    //     //     // Use `iter.next()` if you need to consume the item
-    //     // }
-
-    // }
 }
 
-#[derive(Debug, Clone)]
-struct ArgS {
-    a1: Box<Arg>,
-    a2: Box<Arg>,
-}
-
-#[derive(Debug, Clone)]
-enum Arg {
+// Exercise 2: Random Argument Generation for Ethereum Testing
+#[derive(Clone, Debug)]
+enum Argument {
     U8(u8),
-    Address(String),
-    Vector(Vec<Arg>),
-    Struct(ArgS),
+    U256([u8; 32]),
+    Address([u8; 20]),
+    Vector(Vec<Argument>),
+    Struct(Vec<(String, Argument)>),
+    Signer(Box<Argument>),
 }
 
-impl Arg {
-    pub fn random<R: Rng>(rng: &mut R, max_depth: u64) -> Self {
-        // TODO: implement for Arg::Struct{}
+impl Argument {
+    fn random<R: Rng>(rng: &mut R, max_depth: u64) -> Self {
         let mut stack = vec![(0, max_depth)];
         let mut result = None;
+
         while let Some((depth, remaining_depth)) = stack.pop() {
             if remaining_depth == 0 || rng.gen_bool(0.7) {
-                // Generate simple types
-                let simple_arg = if rng.gen_bool(0.5) {
-                    Arg::U8(rng.gen())
-                } else {
-                    Arg::Address(String::from_utf8([rng.gen(); 20].to_vec()).unwrap_or_default())
-                };
-
-                if depth == 0 {
-                    return simple_arg;
-                } else {
-                    result = Some(simple_arg);
-                }
+                result = Some(match rng.gen_range(0..=4) {
+                    0 => Argument::U8(rng.gen()),
+                    1 => Argument::U256(rng.gen()),
+                    2 => Argument::Address(rng.gen()),
+                    3 => Argument::Signer(Box::new(Argument::Address(rng.gen()))),
+                    _ => {
+                        let mut struct_fields = Vec::new();
+                        for i in 0..rng.gen_range(1..=3) {
+                            struct_fields.push((
+                                format!("field_{}", i),
+                                Argument::random(rng, remaining_depth.saturating_sub(1)),
+                            ));
+                        }
+                        Argument::Struct(struct_fields)
+                    }
+                });
             } else {
-                // Generate complex types
                 let len = rng.gen_range(1..4);
                 let mut args = Vec::with_capacity(len);
                 for _ in 0..len {
                     stack.push((depth + 1, remaining_depth - 1));
                 }
-
-                if depth == 0 {
-                    return Arg::Vector(args);
-                } else {
-                    result = Some(Arg::Vector(args));
-                }
+                result = Some(Argument::Vector(args));
             }
         }
         result.unwrap()
     }
 }
 
-fn gen_test_vec3(max_depth: usize) {
-    let x = (0, 1);
-    let x = (0, 1, 2);
-
-    let mut stack = vec![(0, max_depth)];
-
-    let mut stack = vec![(0, max_depth), (1, max_depth - 1)];
-}
-
-fn gen_test_vec2(vec_len: usize) -> Arg {
-    let mut rng: rand::prelude::ThreadRng = rand::thread_rng();
-
-    let n: f64 = rng.gen_range(0.0..1.0);
-
-    if vec_len == 0 {
-        if rng.gen_bool(0.5) {
-            // address
-
-            return Arg::U8(rng.gen());
-        } else {
-            // U8
-            let addr = format!("{:x}", rng.gen::<u64>());
-
-            return Arg::Address(addr);
-        }
-    } else {
-        if rng.gen_bool(0.5) {
-            let v = vec![gen_test_vec2(vec_len - 1)];
-            return Arg::Vector(v);
-        } else if rng.gen_bool(0.5) {
-            // address
-
-            return Arg::U8(rng.gen());
-        } else {
-            // U8
-            let addr = format!("{:x}", rng.gen::<u64>());
-
-            return Arg::Address(addr);
-        }
+// Exercise 3: Proof of Work Verification
+impl Block {
+    fn verify_proof_of_work(&self, difficulty: usize) -> bool {
+        self.hash.starts_with(&"0".repeat(difficulty))
     }
 
-    // if n < 0.3 {
-    //     let mut v = Vec::new();
-    //     if vec_len > 0 {
-    //         v.push(gen_test_vec(vec_len - 1));
+    fn mine(&mut self, difficulty: usize) {
+        let mut nonce = 0u64;
+        loop {
+            let input = format!(
+                "{}{}{}",
+                self.parent_hash.as_ref().unwrap_or(&String::new()),
+                self.number,
+                nonce
+            );
+            let mut hasher = Sha256::new();
+            hasher.update(input);
+            let result = hasher.finalize();
+            let hash = hex::encode(result);
+            if hash.starts_with(&"0".repeat(difficulty)) {
+                self.hash = hash;
+                break;
+            }
+            nonce += 1;
+        }
+    }
+}
+
+// Exercise 4: Chain Selection Algorithm
+impl Node {
+    fn add_block(&mut self, block: &Block) {
+        self.chain.insert(block.hash.clone(), block.clone());
+        self.update_head(&block.hash);
+    }
+
+    fn update_head(&mut self, new_block_hash: &str) {
+        let new_block = &self.chain[new_block_hash];
+        let current_head = &self.chain[&self.head];
+
+        if new_block.cumulative_difficulty > current_head.cumulative_difficulty
+            || (new_block.cumulative_difficulty == current_head.cumulative_difficulty
+                && new_block.edit_score < current_head.edit_score)
+        {
+            self.head = new_block_hash.to_string();
+        }
+    }
+}
+
+// Exercise 5: Simulating Ethereum Node Behavior
+impl Node {
+    async fn propagate_block(&mut self, block: Block, network_id: u64) {
+        let delay: u64 = block.gas_used / 1000; // Base delay proportional to gas used
+                                                // for &peer_id in &self.peers {
+                                                //     if let Some(peer) = network.get_mut(&peer_id) {
+        let mut rng = rand::thread_rng();
+        let random_factor = rng.gen_range(0.8..1.2); // Random factor to simulate network conditions
+        let delay = (delay as f64 * random_factor) as u64;
+
+        sleep(Duration::from_millis(delay)).await;
+
+        // TODO - figuer out if need this
+        // if rng.gen_bool(0.05) { // 5% chance of dropping the message
+        //     println!("Block propagation from Node {} to Node {} failed", self.id, network_id);
+        //     continue;
+        // }
+
+        self.receive_block(block.clone()).await;
+        //     }
+        // }
+    }
+
+    // async fn propagate_block(&self, block: Block, network: &mut HashMap<u64, Node>) {
+    //     let delay: u64 = block.gas_used / 1000; // Base delay proportional to gas used
+    //     for &peer_id in &self.peers {
+    //         if let Some(peer) = network.get_mut(&peer_id) {
+    //             let mut rng = rand::thread_rng();
+    //             let random_factor = rng.gen_range(0.8..1.2); // Random factor to simulate network conditions
+    //             let delay = (delay as f64 * random_factor) as u64;
+
+    //             sleep(Duration::from_millis(delay)).await;
+
+    //             if rng.gen_bool(0.05) { // 5% chance of dropping the message
+    //                 println!("Block propagation from Node {} to Node {} failed", self.id, peer_id);
+    //                 continue;
+    //             }
+
+    //             peer.receive_block(block.clone()).await;
+    //         }
     //     }
-    //     // Arg::U8(rng.gen_range(0..255))
-    //     return Arg::Vector(v);
-    // } else if n >= 0.3 && n < 0.6 {
-    //     return Arg::U8(rng.gen_range(0..255));
-    // } else {
-    //     let choices = ["apple", "banana", "cherry"];
-    //     let random_choice = choices[rng.gen_range(0..choices.len())];
-    //     return Arg::Address(random_choice.to_string());
-    // };
-}
+    // }
 
-fn gen_test_vec(vec_len: usize) -> Arg {
-    let mut rng: rand::prelude::ThreadRng = rand::thread_rng();
-
-    let n: f64 = rng.gen_range(0.0..1.0);
-
-    if n < 0.3 {
-        let mut v = Vec::new();
-        if vec_len > 0 {
-            v.push(gen_test_vec(vec_len - 1));
+    async fn receive_block(&mut self, block: Block) {
+        if !self.chain.contains_key(&block.hash) {
+            if let Some(parent_hash) = &block.parent_hash {
+                if self.chain.contains_key(parent_hash) {
+                    self.add_block(&block);
+                    println!("Node {} received new block: {}", self.id, block.hash);
+                } else {
+                    println!("Node {} received orphan block: {}", self.id, block.hash);
+                }
+            }
         }
-        // Arg::U8(rng.gen_range(0..255))
-        return Arg::Vector(v);
-    } else if n >= 0.3 && n < 0.6 {
-        return Arg::U8(rng.gen_range(0..255));
-    } else {
-        let choices = ["apple", "banana", "cherry"];
-        let random_choice = choices[rng.gen_range(0..choices.len())];
-        return Arg::Address(random_choice.to_string());
+    }
+}
+
+// Exercise 6: Implementing a Simple Verifier Trait
+trait Verifier {
+    fn verify(&self, data: &[u8]) -> bool;
+}
+
+struct AddressVerifier;
+
+impl Verifier for AddressVerifier {
+    fn verify(&self, data: &[u8]) -> bool {
+        data.len() == 20
+    }
+}
+
+struct SignatureVerifier;
+
+impl Verifier for SignatureVerifier {
+    fn verify(&self, data: &[u8]) -> bool {
+        data.len() == 65 && (data[0] == 27 || data[0] == 28)
+    }
+}
+
+struct ContractValidator {
+    verifiers: Vec<Box<dyn Verifier>>,
+}
+
+impl ContractValidator {
+    fn new() -> Self {
+        Self { verifiers: vec![] }
+    }
+
+    fn add_verifier(&mut self, verifier: Box<dyn Verifier>) {
+        self.verifiers.push(verifier);
+    }
+
+    fn validate(&self, data: &[u8]) -> bool {
+        for verifier in &self.verifiers {
+            if !verifier.verify(data) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+// Exercise 7: Broadcasting Messages in a Network of Nodes
+#[derive(Clone, Debug)]
+struct Message {
+    id: u64,
+    content: String,
+}
+
+async fn broadcast_message(origin: u64, message: Message, network: &mut HashMap<u64, Node>) {
+    let mut rng = rand::thread_rng();
+    // if let Some(origin_node) = network.get(&origin) {
+    //     for &neighbor in &origin_node.peers {
+
+    //         if let Some(neighbor_node) = network.get_mut(&neighbor) {
+    //             let delay = rng.gen_range(50..150);
+    //             let msg = message.clone();
+    //             tokio::spawn(async move {
+    //                 sleep(Duration::from_millis(delay)).await;
+    //                 println!("Node {} received: {:?}", neighbor, msg);
+    //             });
+    //         }
+    //     }
+    // }
+    if let Some(origin_node) = network.get(&origin) {
+        let peers = origin_node.peers.clone(); // Clone to avoid borrowing `network` mutably
+        for neighbor in peers {
+            if let Some(neighbor_node) = network.get_mut(&neighbor) {
+                // Use `neighbor_node` here
+                let delay = rng.gen_range(50..150);
+                let msg = message.clone();
+                tokio::spawn(async move {
+                    sleep(Duration::from_millis(delay)).await;
+                    println!("Node {} received: {:?}", neighbor, msg);
+                });
+            }
+        }
+    }
+}
+
+// Exercise 8: Simulating Forks and Chain Reorganizations
+fn simulate_network(nodes: &mut [Node], new_block: Block) {
+    for node in nodes.iter_mut() {
+        node.add_block(&new_block);
+    }
+}
+
+// Exercise 9: Simulating the Effect of Block Size on Forking
+async fn simulate_network_with_delay(nodes: &mut [Node], new_block: Block, origin: usize) {
+    nodes[origin].receive_block(new_block.clone()).await;
+    for (i, node) in nodes.iter_mut().enumerate() {
+        if i != origin {
+            node.receive_block(new_block.clone()).await;
+        }
+    }
+}
+
+// Exercise 10: Implementing Conditional Traits for Gas Calculation (EIP-1559)
+trait GasCalculator {
+    fn calculate_gas(&self, gas_used: u64, base_fee: u64) -> u64;
+}
+
+struct PreLondonCalculator;
+
+impl GasCalculator for PreLondonCalculator {
+    fn calculate_gas(&self, gas_used: u64, _base_fee: u64) -> u64 {
+        gas_used * 20 // Simplified gas price of 20 Gwei
+    }
+}
+
+struct PostLondonCalculator;
+
+impl GasCalculator for PostLondonCalculator {
+    fn calculate_gas(&self, gas_used: u64, base_fee: u64) -> u64 {
+        let priority_fee = 2; // Simplified priority fee of 2 Gwei
+        gas_used * (base_fee + priority_fee)
+    }
+}
+
+enum NetworkState {
+    PreLondon,
+    PostLondon,
+}
+
+impl NetworkState {
+    fn get_calculator(&self) -> Box<dyn GasCalculator> {
+        match self {
+            NetworkState::PreLondon => Box::new(PreLondonCalculator),
+            NetworkState::PostLondon => Box::new(PostLondonCalculator),
+        }
+    }
+}
+
+impl Node {
+    fn get_chain(&self) -> Vec<String> {
+        let mut chain_vec = vec![];
+        let mut current = &self.head; // current head of the chain (the most recent block).
+
+        while let Some(block) = self.chain.get(current) { 
+            chain_vec.push(current.clone()); // 
+            if let Some(parent) = &block.parent_hash { // 3->2->1->root
+                current = parent;
+            } else {
+                break;
+            }
+        }
+        chain_vec.reverse(); // root->1->2->3
+        chain_vec
+    }
+
+}
+// Exercise 11: Chain Edit Score and Fork Choice Algorithm
+fn calculate_edit_score(node: &Node, block_hash: &str) -> u64 {
+    let mut score = 0;
+    let mut current = block_hash;
+    let main_chain = node.get_chain(); // TODO
+
+    while let Some(block) = node.chain.get(current) {
+        if main_chain.contains(&block.hash) {
+            break;
+        }
+        score += 1;
+        if let Some(parent) = &block.parent_hash {
+            current = parent;
+        } else {
+            break;
+        }
+    }
+    score
+}
+
+// Exercise 12: Handling Multiple Consumers in a Blockchain System
+struct TransactionPool {
+    transactions: HashMap<u64, Transaction>,
+    processed: HashSet<u64>,
+}
+
+impl TransactionPool {
+    fn new() -> Self {
+        TransactionPool {
+            transactions: HashMap::new(),
+            processed: HashSet::new(),
+        }
+    }
+
+    fn add_transaction(&mut self, tx: Transaction) -> bool {
+        if !self.processed.contains(&tx.id) {
+            self.transactions.insert(tx.id, tx);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn get_next_transaction(&mut self) -> Option<Transaction> {
+        let next_tx = self.transactions.values().next().cloned();
+        if let Some(tx) = &next_tx {
+            self.transactions.remove(&tx.id);
+            self.processed.insert(tx.id);
+        }
+        next_tx
+    }
+}
+
+async fn worker(id: u64, pool: Arc<Mutex<TransactionPool>>, mut rx: broadcast::Receiver<()>) {
+    while rx.recv().await.is_ok() {
+        let mut pool = pool.lock().await;
+        if let Some(tx) = pool.get_next_transaction() {
+            println!("Worker {} processing transaction {:?}", id, tx);
+            sleep(Duration::from_millis(100)).await;
+        }
+    }
+}
+
+// Main function to demonstrate the combined functionality
+#[tokio::main]
+async fn main() {
+    let mut rng = rand::thread_rng();
+
+    // Initialize network
+    let mut network = HashMap::new();
+    for i in 1..=5 {
+        network.insert(
+            i,
+            Node {
+                id: i,
+                chain: HashMap::new(),
+                head: "genesis".to_string(),
+                peers: vec![],
+            },
+        );
+    }
+
+    // Connect nodes
+    for i in 1..=5 {
+        for j in i + 1..=5 {
+            network.get_mut(&i).unwrap().peers.push(j);
+            network.get_mut(&j).unwrap().peers.push(i);
+        }
+    }
+
+    // Create genesis block
+    let genesis = Block {
+        hash: "genesis".to_string(),
+        parent_hash: None,
+        number: 0,
+        cumulative_difficulty: 0,
+        gas_used: 0,
+        edit_score: 0,
     };
-}
 
-fn gen_test() {
-    enum Arg {
-        U8(u8),
-        Address(String),
+    for node in network.values_mut() {
+        node.add_block(&genesis);
     }
-    let mut rng: rand::prelude::ThreadRng = rand::thread_rng();
 
-    let n: f64 = rng.gen_range(0.0..1.0);
-
-    let a = if n > 0.5 {
-        Arg::U8(rng.gen_range(0..255))
-    } else {
-        let choices = ["apple", "banana", "cherry"];
-        let random_choice = choices[rng.gen_range(0..choices.len())];
-        Arg::Address(random_choice.to_string())
+    // Demonstrate block propagation and forking
+    let block1 = Block {
+        hash: "block1".to_string(),
+        parent_hash: Some("genesis".to_string()),
+        number: 1,
+        cumulative_difficulty: 10,
+        gas_used: 1_000_000,
+        edit_score: 0,
     };
-}
 
-fn demo_gen_rnd() {
-    let mut rng: rand::prelude::ThreadRng = rand::thread_rng();
-    let n: i32 = rng.gen_range(0..10);
-    let n: f64 = rng.gen_range(0.0..1.0);
-    let x: f64 = rng.gen();
-    let x: bool = rng.gen();
-    // let x: Vec<bool> = rng.gen();
-    let y = rng.gen_range(0..5);
+    let block2a = Block {
+        hash: "block2a".to_string(),
+        parent_hash: Some("block1".to_string()),
+        number: 2,
+        cumulative_difficulty: 20,
+        gas_used: 2_000_000,
+        edit_score: 0,
+    };
 
-    let choices = ["apple", "banana", "cherry"];
-    let random_choice = choices[rng.gen_range(0..choices.len())];
-}
+    let block2b = Block {
+        hash: "block2b".to_string(),
+        parent_hash: Some("block1".to_string()),
+        number: 2,
+        cumulative_difficulty: 20,
+        gas_used: 1_500_000,
+        edit_score: 1,
+    };
 
-fn demo_peekable_iterator() {
-    let v = vec![1, 2, 3];
-    let mut pk = v.iter().peekable();
+    let network_id = 1; // Assign a network ID
 
-    while let Some(&&item) = pk.peek() {
-        println!("Peeked item: {:?}", item);
-        // Use `iter.next()` if you need to consume the item
+    network
+        .get_mut(&1)
+        .unwrap()
+        .propagate_block(block1.clone(), network_id)
+        .await;
+    network
+        .get_mut(&2)
+        .unwrap()
+        .propagate_block(block2a.clone(), network_id)
+        .await;
+    network
+        .get_mut(&3)
+        .unwrap()
+        .propagate_block(block2b.clone(), network_id)
+        .await;
+
+    // Print network state
+    for (id, node) in &network {
+        println!(
+            "Node {}: Head = {}, Chain length = {}",
+            id,
+            node.head,
+            node.chain.len()
+        );
     }
 
-    let mut v2 = v.iter().cloned();
-    let mut v3 = v2.peekable();
+    // Demonstrate transaction processing
+    let pool = Arc::new(Mutex::new(TransactionPool::new()));
+    // let (tx, _) = mpsc::channel(100);
+    let (tx, _) = broadcast::channel(100);
 
-    while let Some(item) = v3.peek() {
-        println!("Peeked item: {:?}", item);
-        // Use `iter.next()` if you need to consume the item
+    let mut worker_handles = vec![];
+
+    // Spawn multiple workers for transaction processing
+    for i in 1..=3 {
+        let pool_clone = Arc::clone(&pool);
+        let rx = tx.subscribe();
+        let handle = tokio::spawn(async move {
+            worker(i, pool_clone, rx).await;
+        });
+        worker_handles.push(handle);
     }
+
+    // Submit transactions
+    for i in 1..=10 {
+        let transaction = Transaction {
+            id: i,
+            from: format!("0x{:040x}", rng.gen::<u128>()),
+            to: format!("0x{:040x}", rng.gen::<u128>()),
+            amount: rng.gen_range(1..1000),
+            nonce: i,
+        };
+        pool.lock().await.add_transaction(transaction);
+        tx.send(()).unwrap();
+    }
+
+    // Wait for transaction processing
+    sleep(Duration::from_secs(2)).await;
+
+    // Demonstrate Proof of Work
+    let mut pow_block = Block {
+        hash: String::new(),
+        parent_hash: Some("block2a".to_string()),
+        number: 3,
+        cumulative_difficulty: 30,
+        gas_used: 1_800_000,
+        edit_score: 0,
+    };
+    pow_block.mine(4); // Mine with difficulty 4
+    println!("Mined block with PoW: {}", pow_block.hash);
+    println!("PoW valid: {}", pow_block.verify_proof_of_work(4));
+
+    // Demonstrate gas calculation
+    let gas_calculator = PostLondonCalculator;
+    let gas_used = 21000; // Typical gas used for a simple transaction
+    let base_fee = 100; // 100 Gwei
+    let gas_cost = gas_calculator.calculate_gas(gas_used, base_fee);
+    println!("Gas cost for a simple transaction: {} wei", gas_cost);
+
+    // Demonstrate chain edit score
+    let node1 = network.get_mut(&1).unwrap();
+    node1.add_block(&pow_block);
+    let edit_score = calculate_edit_score(node1, &pow_block.hash);
+    println!("Edit score for the new block: {}", edit_score);
+
+    // Demonstrate random argument generation
+    let random_arg = Argument::random(&mut rng, 3);
+    println!("Random Ethereum argument: {:?}", random_arg);
+
+    // Demonstrate contract validation
+    let mut validator = ContractValidator::new();
+    validator.add_verifier(Box::new(AddressVerifier));
+    validator.add_verifier(Box::new(SignatureVerifier));
+
+    let valid_address = vec![0u8; 20];
+    let valid_signature = vec![27u8; 65];
+    println!("Valid address? {}", validator.validate(&valid_address));
+    println!("Valid signature? {}", validator.validate(&valid_signature));
+
+    // Demonstrate message broadcasting
+    let message = Message {
+        id: 1,
+        content: "Hello, Ethereum network!".to_string(),
+    };
+    broadcast_message(1, message, &mut network).await;
+
+    // Clean up
+    drop(tx);
+    for handle in worker_handles {
+        handle.await.unwrap();
+    }
+
+    println!("Simulation completed successfully!");
 }
